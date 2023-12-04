@@ -39,7 +39,7 @@ if (file.exists(my_db)) {
 ## Exercise 2 - a. Gathering structured data
 Here I will write a automatic function to extract two tables from a Wikipedia page. 
 
-```{r exercise 2, echo = FALSE}
+```{r exercise 2, echo = FALSE, cache=TRUE}
 
 # Load the packages.
 library(RSelenium)
@@ -84,10 +84,12 @@ table_scrape <- function() {
   }
   
   # Now the item "extracted_table" contains the R1 and R2 tables we need. Here I will rename each table to make them more explicit.
-  names(extracted_table) <- c("R1 (Very High Research Activity)", "R2 (High Research Activity)")
-  
+  #names(extracted_table) <- c("R1 (Very High Research Activity)", "R2 (High Research Activity)")
+  R1_table <- extracted_table[1]
+  R2_table <- extracted_table[2]
+  final_table <- bind_rows(R1_table, R2_table)
   # Return the function result.
-  return(extracted_table)
+  return(final_table)
 }
 
 # Scrape the tables.
@@ -100,12 +102,248 @@ driver$close()
 
 ```
 
-```{r echo_example, echo=TRUE}
-# {[language] [chunk_name], [chunk_options]}
-# here we use echo=TRUE to override our global options and make the chunk appear exactly here. 
+```{r exercise 2b, cache=TRUE}
+# Function to scrape unstructured data
+extractUnstructuredData <- function(structured_data) {
+  coordinates <- vector("character", length = nrow(structured_data))
+  endowment <- vector("character", length = nrow(structured_data))
+  undergrad <- vector("numeric", length = nrow(structured_data))
+  postgrad <- vector("numeric", length = nrow(structured_data))
+  students <- vector("numeric", length = nrow(structured_data))
+  total_students <- vector("numeric", length = nrow(structured_data))
+  
+  for (i in 1:nrow(structured_data)) {
+    university_url <- paste0('https://en.wikipedia.org', structured_data$Wikipedia_Link[i])
+    
+    # Read the HTML content of the university's page
+    university_page <- read_html(university_url)
+    
+    # Extracting coordinates
+    coordinates_node <- university_page %>%
+      html_nodes("span.geo-dec") %>%
+      html_text() %>%
+      first()
+    coordinates[i] <- coordinates_node
+    
+    # Extracting endowment
+    endowment_node <- university_page %>%
+      html_nodes(".infobox tbody tr:contains('Endowment') td:nth-child(2)") %>%
+      html_text() 
+    endowment[i] <- ifelse(length(endowment_node) > 0, endowment_node, "Not Available")
+    endowment[i] <- gsub("\\[\\d+\\]", "", endowment[i])
+    
+    # Extracting total number of students
+    undergrad_node <- university_page %>%
+      html_nodes(".infobox tbody tr:contains('Undergraduates') td:nth-child(2)") %>%
+      html_text() 
+    undergrad_node <- str_extract(undergrad_node, "(\\d{1,3},\\d{3})")
+    undergrad_node <- gsub(",", "", undergrad_node)
+    undergrad[i] <- ifelse(length(undergrad_node) > 0, undergrad_node, NA) %>% as.numeric()
 
-print("This code chunk is visible in this section.")
+    postgrad_node <- university_page %>%
+      html_nodes(".infobox tbody tr:contains('Postgraduates') td:nth-child(2)") %>%
+      html_text() 
+    postgrad_node <- str_extract(postgrad_node, "(\\d{1,3},\\d{3})")
+    postgrad_node <- gsub(",", "", postgrad_node)
+    postgrad[i] <- ifelse(length(postgrad_node) > 0, postgrad_node, NA) %>% as.numeric()
+    
+    students_node <- university_page %>%
+      html_nodes(".infobox-label:contains('Students') + .infobox-data") %>%
+      html_text() 
+    students_node <- str_extract(students_node, "(\\d{1,3},\\d{3})")
+    students_node <- gsub(",", "", students_node)
+    students[i] <- ifelse(length(students_node) > 0, students_node, NA) %>% as.numeric()
+    
+    if (!is.na(undergrad[i]) | !is.na(postgrad[i])) {
+      undergrad[is.na(undergrad)] <- 0
+      postgrad[is.na(postgrad)] <- 0
+      students[is.na(students)] <- 0
+      total_students[i] <- undergrad[i] + postgrad[i]
+      if (total_students[i] < students[i]) {
+        total_students[i] <- students[i]
+      }
+      else {total_students[i] <- students[i]}
+    }
+    else {total_students[i] <- students[i]}
+  }
+  
+  # Adding the extracted data to the structured data
+  structured_data$Coordinates <- coordinates
+  structured_data$Endowment <- endowment
+  structured_data$Total_Students <- total_students
+  
+  return(structured_data)
+}
+
+# Extract unstructured data
+complete_data <- extractUnstructuredData(structured_tables)
+print(complete_data)
 ```
+## Exercise - 2 c.Data munging
+``` {r exercise 2c}
+ivydata <- read.csv("ivyleague.csv")
+ivydata$uni_name <- c("University of Pennsylvania", "Brown University", "Columbia University", "Cornell University", "Dartmouth College", "Harvard University", "Princeton University", "Yale University")
+
+ivydata$County <- paste(ivydata$county, ivydata$state, sep = ", ")
+
+for (i in 1:nrow(complete_data)) {
+  if (complete_data$Institution[i] %in% ivydata$uni_name) {
+  row_number <- which(ivydata$uni_name == complete_data$Institution[i])
+  
+  complete_data$IvyLeague_Member[i] <- "Yes"
+  complete_data$County[i] <- ivydata$County[row_number]
+  complete_data$EIN[i] <- ivydata$ein[row_number]
+  }
+  else {complete_data$IvyLeague_Member[i] <- "No"
+  complete_data$County[i] <- NA
+  complete_data$EIN[i] <- NA}
+}
+
+
+print(complete_data)
+
+
+```
+## Exercise 2 d
+```{r exercise 2d, cache=TRUE}
+
+# Create your database connection
+con <- dbConnect(RSQLite::SQLite(), dbname = "my_database.sqlite")
+
+# Write the tidy table to your database
+dbWriteTable(con, "Exercise2_Universities_Data", complete_data, row.names = FALSE, overwrite = TRUE)
+
+# Close the database connection when done
+dbDisconnect(con)
+
+checkTable <- function(database_name, table_name) {
+  # Connect to the database
+  con <- dbConnect(RSQLite::SQLite(), dbname = database_name)
+  
+  # Check if the table exists
+  if (dbExistsTable(con, table_name)) {
+    # Get the table information
+    table_info <- dbGetQuery(con, paste0("PRAGMA table_info(", table_name, ")"))
+    
+    # Get number of rows and columns
+    table_dimensions <- dbGetQuery(con, paste0("SELECT COUNT(*) AS num_rows, COUNT(*) AS num_columns FROM ", table_name))
+    
+    # Get column names
+    column_names <- table_info$name
+    
+    # Output information
+    cat("Number of Rows:", table_dimensions$num_rows, "\n")
+    cat("Number of Columns:", table_dimensions$num_columns, "\n")
+    cat("Column Names:", column_names, "\n")
+  } else {
+    cat("The table does not exist.")
+  }
+  
+  # Close the database connection
+  dbDisconnect(con)
+}
+
+checkTable("my_database.sqlite", "Exercise2_Universities_Data")
+
+```
+
+## Exercise 3 a.Scraping annual rank
+```{r exercise 3a, cache=TRUE}
+rD3 <- rsDriver(browser=c("firefox"), verbose = F, port = 6789L, chromever = NULL) 
+driver3 <- rD3[["client"]]
+url3 <- 'https://www.shanghairanking.com/'
+driver3$navigate(url3)
+src3 <- driver3$getPageSource()
+
+Explore_button <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div[2]/div[2]/div[1]/button")
+Explore_button$clickElement()
+
+ARWU_Rank <- data.frame(matrix(nrow = 24, ncol = 2))
+colnames(ARWU_Rank) <- c("Institution_Year", "Rank")
+#ARWU_Rank <- rbind(ARWU_Rank, list("University of Pennsylvania_2023"))
+
+Search_field <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
+
+#Scrape the 2023 ranking data.
+for (i in 1:nrow(ivydata)) {
+  Search_field$sendKeysToElement(list(ivydata$uni_name[i]))
+  Search_field$sendKeysToElement(list(key = "enter"))
+  rank_2023 <- driver3$findElement(using = 'class name', value = 'ranking')$getElementText()
+  ARWU_Rank$Institution_Year[i] <- paste0(ivydata$uni_name[i], "_2023")
+  ARWU_Rank$Rank[i] <- rank_2023[[1]]
+  Search_field$clickElement()
+  Search_field$sendKeysToElement(list(key = "control", "A"))
+  Search_field$sendKeysToElement(list(key = "delete"))
+}
+
+#Scrape the 2013 ranking data.
+year_select_button <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[1]/div[2]/div[2]/div/div[1]/div")
+year_select_button$clickElement()
+button2013 <- driver3$findElement(using = "css selector", value = "div.rank-select:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li:nth-child(11)")
+button2013$clickElement()
+
+Search_field <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
+
+for (i in 1:nrow(ivydata)) {
+  #Search_field$clickElement()
+  Search_field$sendKeysToElement(list(ivydata$uni_name[i]))
+  Search_field$sendKeysToElement(list(key = "enter"))
+  rank_2013 <- driver3$findElement(using = 'class name', value = 'ranking')$getElementText()
+  ARWU_Rank$Institution_Year[i+8] <- paste0(ivydata$uni_name[i], "_2013")
+  ARWU_Rank$Rank[i+8] <- rank_2013[[1]]
+  Search_field$clickElement()
+  Search_field$sendKeysToElement(list(key = "control", "A"))
+  Search_field$sendKeysToElement(list(key = "delete"))
+}
+
+
+#Scrape the 2013 ranking data.
+year_select_button <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[1]/div[2]/div[2]/div/div[1]/div")
+year_select_button$clickElement()
+button2003 <- driver3$findElement(using = "css selector", value = "div.rank-select:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li:nth-child(21)")
+button2003$clickElement()
+
+Search_field <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
+
+for (i in 1:nrow(ivydata)) {
+  #Search_field$clickElement()
+  Search_field$sendKeysToElement(list(ivydata$uni_name[i]))
+  Search_field$sendKeysToElement(list(key = "enter"))
+  rank_2003 <- driver3$findElement(using = 'class name', value = 'ranking')$getElementText()
+  ARWU_Rank$Institution_Year[i+16] <- paste0(ivydata$uni_name[i], "_2003")
+  ARWU_Rank$Rank[i+16] <- rank_2003[[1]]
+  Search_field$clickElement()
+  Search_field$sendKeysToElement(list(key = "control", "A"))
+  Search_field$sendKeysToElement(list(key = "delete"))
+}
+
+for (i in 1:nrow(ARWU_Rank)) {
+  ARWU_Rank$Rank[i] <- mean(as.numeric(str_extract_all(ARWU_Rank$Rank[i], "\\d+")[[1]]))
+}
+
+driver3$close()
+
+print(ARWU_Rank)
+
+con <- dbConnect(RSQLite::SQLite(), dbname = "my_database.sqlite")
+dbWriteTable(con, "ARWU_rankings", ARWU_Rank, row.names = FALSE, overwrite = TRUE)
+
+# Function to check table existence and dimensionality
+checkTable("my_database.sqlite", "ARWU_rankings")
+
+```
+## Exercise 3 b.Scraping subject ranks for 2023
+```{r exercise 3b, cache=TRUE}
+
+
+
+
+
+
+```
+
+
+
 
 ## Appendix: All code in this assignment
 
