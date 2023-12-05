@@ -36,7 +36,7 @@ if (file.exists(my_db)) {
 }
 
 ```
-## Exercise 2 - a. Gathering structured data
+## Exercise 2.a Gathering structured data
 Here I will write a automatic function to extract two tables from a Wikipedia page. 
 
 ```{r exercise 2, echo = FALSE, cache=TRUE}
@@ -49,7 +49,7 @@ library(xml2)
 library(netstat)
 
 # Set up the driver and navigate to the target url.
-rD <- rsDriver(browser=c("firefox"), verbose = F, port = 2345L, chromever = NULL) 
+rD <- rsDriver(browser=c("firefox"), verbose = F, port = 1234L, chromever = NULL) 
 driver <- rD[["client"]]
 url <- 'https://en.wikipedia.org/wiki/List_of_research_universities_in_the_United_States'
 driver$navigate(url)
@@ -78,6 +78,7 @@ table_scrape <- function() {
     links <- result_html[[i]]%>%
       html_nodes("td:nth-child(1) a") %>%
       html_attr("href")
+    links <- paste0('https://en.wikipedia.org', links)
     links_df <- data.frame(Wikipedia_Link = links)
     new_table <- bind_cols(result_table[[i]], links_df)
     extracted_table[[i]] <- new_table
@@ -97,23 +98,34 @@ structured_tables <- table_scrape()
 print(structured_tables)
 
 # Close the browser. 
-driver$close()
+#driver$close()
 
 
 ```
-
+##Exercise 2.b Gathering unstructured data
 ```{r exercise 2b, cache=TRUE}
 # Function to scrape unstructured data
+convert_to_number <- function(str) {
+  multiplier <- 1
+  if (grepl("million", str, ignore.case = TRUE)) {
+    multiplier <- 1e6 
+  } else if (grepl("billion", str, ignore.case = TRUE)) {
+    multiplier <- 1e9 
+  }
+  number <- as.numeric(gsub("[^0-9.]", "", str)) * multiplier
+  return(number)
+}
+  
 extractUnstructuredData <- function(structured_data) {
   coordinates <- vector("character", length = nrow(structured_data))
-  endowment <- vector("character", length = nrow(structured_data))
+  endowment <- vector("numeric", length = nrow(structured_data))
   undergrad <- vector("numeric", length = nrow(structured_data))
   postgrad <- vector("numeric", length = nrow(structured_data))
   students <- vector("numeric", length = nrow(structured_data))
   total_students <- vector("numeric", length = nrow(structured_data))
   
   for (i in 1:nrow(structured_data)) {
-    university_url <- paste0('https://en.wikipedia.org', structured_data$Wikipedia_Link[i])
+    university_url <- structured_data$Wikipedia_Link[i]
     
     # Read the HTML content of the university's page
     university_page <- read_html(university_url)
@@ -131,6 +143,7 @@ extractUnstructuredData <- function(structured_data) {
       html_text() 
     endowment[i] <- ifelse(length(endowment_node) > 0, endowment_node, "Not Available")
     endowment[i] <- gsub("\\[\\d+\\]", "", endowment[i])
+    endowment[i] <- gsub("\\(.*\\)", "", endowment[i]) %>% convert_to_number()
     
     # Extracting total number of students
     undergrad_node <- university_page %>%
@@ -162,7 +175,6 @@ extractUnstructuredData <- function(structured_data) {
       if (total_students[i] < students[i]) {
         total_students[i] <- students[i]
       }
-      else {total_students[i] <- students[i]}
     }
     else {total_students[i] <- students[i]}
   }
@@ -179,8 +191,8 @@ extractUnstructuredData <- function(structured_data) {
 complete_data <- extractUnstructuredData(structured_tables)
 print(complete_data)
 ```
-## Exercise - 2 c.Data munging
-``` {r exercise 2c}
+## Exercise 2.c Data munging
+``` {r exercise 2c, warning = FALSE}
 ivydata <- read.csv("ivyleague.csv")
 ivydata$uni_name <- c("University of Pennsylvania", "Brown University", "Columbia University", "Cornell University", "Dartmouth College", "Harvard University", "Princeton University", "Yale University")
 
@@ -199,22 +211,20 @@ for (i in 1:nrow(complete_data)) {
   complete_data$EIN[i] <- NA}
 }
 
-
 print(complete_data)
 
-
 ```
-## Exercise 2 d
+## Exercise 2.d Writing to the relational database
 ```{r exercise 2d, cache=TRUE}
 
-# Create your database connection
+# Create your database connection.
 con <- dbConnect(RSQLite::SQLite(), dbname = "my_database.sqlite")
 
-# Write the tidy table to your database
+# Write the tidy table to your database.
 dbWriteTable(con, "Exercise2_Universities_Data", complete_data, row.names = FALSE, overwrite = TRUE)
 
-# Close the database connection when done
-dbDisconnect(con)
+# Create a primary key.
+dbExecute(con, "CREATE UNIQUE INDEX pk_Institution ON Exercise2_Universities_Data(Institution)")
 
 checkTable <- function(database_name, table_name) {
   # Connect to the database
@@ -247,28 +257,26 @@ checkTable("my_database.sqlite", "Exercise2_Universities_Data")
 
 ```
 
-## Exercise 3 a.Scraping annual rank
+## Exercise 3.a Scraping annual rank
 ```{r exercise 3a, cache=TRUE}
-rD3 <- rsDriver(browser=c("firefox"), verbose = F, port = 6789L, chromever = NULL) 
-driver3 <- rD3[["client"]]
-url3 <- 'https://www.shanghairanking.com/'
-driver3$navigate(url3)
-src3 <- driver3$getPageSource()
 
-Explore_button <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div[2]/div[2]/div[1]/button")
+url3 <- 'https://www.shanghairanking.com/'
+driver$navigate(url3)
+
+Explore_button <- driver$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div[2]/div[2]/div[1]/button")
 Explore_button$clickElement()
 
 ARWU_Rank <- data.frame(matrix(nrow = 24, ncol = 2))
 colnames(ARWU_Rank) <- c("Institution_Year", "Rank")
-#ARWU_Rank <- rbind(ARWU_Rank, list("University of Pennsylvania_2023"))
 
-Search_field <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
+Sys.sleep(5)
+Search_field <- driver$findElement(using = 'css selector', value = ".search-input")
 
 #Scrape the 2023 ranking data.
 for (i in 1:nrow(ivydata)) {
   Search_field$sendKeysToElement(list(ivydata$uni_name[i]))
   Search_field$sendKeysToElement(list(key = "enter"))
-  rank_2023 <- driver3$findElement(using = 'class name', value = 'ranking')$getElementText()
+  rank_2023 <- driver$findElement(using = 'class name', value = 'ranking')$getElementText()
   ARWU_Rank$Institution_Year[i] <- paste0(ivydata$uni_name[i], "_2023")
   ARWU_Rank$Rank[i] <- rank_2023[[1]]
   Search_field$clickElement()
@@ -277,18 +285,18 @@ for (i in 1:nrow(ivydata)) {
 }
 
 #Scrape the 2013 ranking data.
-year_select_button <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[1]/div[2]/div[2]/div/div[1]/div")
+year_select_button <- driver$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[1]/div[2]/div[2]/div/div[1]/div")
 year_select_button$clickElement()
-button2013 <- driver3$findElement(using = "css selector", value = "div.rank-select:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li:nth-child(11)")
+button2013 <- driver$findElement(using = "css selector", value = "div.rank-select:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li:nth-child(11)")
 button2013$clickElement()
 
-Search_field <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
+Search_field <- driver$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
 
 for (i in 1:nrow(ivydata)) {
   #Search_field$clickElement()
   Search_field$sendKeysToElement(list(ivydata$uni_name[i]))
   Search_field$sendKeysToElement(list(key = "enter"))
-  rank_2013 <- driver3$findElement(using = 'class name', value = 'ranking')$getElementText()
+  rank_2013 <- driver$findElement(using = 'class name', value = 'ranking')$getElementText()
   ARWU_Rank$Institution_Year[i+8] <- paste0(ivydata$uni_name[i], "_2013")
   ARWU_Rank$Rank[i+8] <- rank_2013[[1]]
   Search_field$clickElement()
@@ -297,19 +305,19 @@ for (i in 1:nrow(ivydata)) {
 }
 
 
-#Scrape the 2013 ranking data.
-year_select_button <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[1]/div[2]/div[2]/div/div[1]/div")
+#Scrape the 2003 ranking data.
+year_select_button <- driver$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[1]/div[2]/div[2]/div/div[1]/div")
 year_select_button$clickElement()
-button2003 <- driver3$findElement(using = "css selector", value = "div.rank-select:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li:nth-child(21)")
+button2003 <- driver$findElement(using = "css selector", value = "div.rank-select:nth-child(2) > div:nth-child(2) > ul:nth-child(1) > li:nth-child(21)")
 button2003$clickElement()
 
-Search_field <- driver3$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
+Search_field <- driver$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
 
 for (i in 1:nrow(ivydata)) {
   #Search_field$clickElement()
   Search_field$sendKeysToElement(list(ivydata$uni_name[i]))
   Search_field$sendKeysToElement(list(key = "enter"))
-  rank_2003 <- driver3$findElement(using = 'class name', value = 'ranking')$getElementText()
+  rank_2003 <- driver$findElement(using = 'class name', value = 'ranking')$getElementText()
   ARWU_Rank$Institution_Year[i+16] <- paste0(ivydata$uni_name[i], "_2003")
   ARWU_Rank$Rank[i+16] <- rank_2003[[1]]
   Search_field$clickElement()
@@ -321,28 +329,274 @@ for (i in 1:nrow(ARWU_Rank)) {
   ARWU_Rank$Rank[i] <- mean(as.numeric(str_extract_all(ARWU_Rank$Rank[i], "\\d+")[[1]]))
 }
 
-driver3$close()
-
 print(ARWU_Rank)
 
-con <- dbConnect(RSQLite::SQLite(), dbname = "my_database.sqlite")
-dbWriteTable(con, "ARWU_rankings", ARWU_Rank, row.names = FALSE, overwrite = TRUE)
+#con <- dbConnect(RSQLite::SQLite(), dbname = "my_database.sqlite")
+dbWriteTable(con, "ARWU_ranks", ARWU_Rank, row.names = FALSE, overwrite = TRUE)
 
 # Function to check table existence and dimensionality
-checkTable("my_database.sqlite", "ARWU_rankings")
+checkTable("my_database.sqlite", "ARWU_ranks")
 
 ```
-## Exercise 3 b.Scraping subject ranks for 2023
+## Exercise 3.b Scraping subject ranks for 2023
 ```{r exercise 3b, cache=TRUE}
 
+driver$navigate(url3)
 
+Subject_Explore_Button <- driver$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div[2]/div[3]/div[1]/button")
+Subject_Explore_Button$clickElement()
+social_science <- driver$findElement(using = "css selector", value = "#RS05")
+subject_page <- social_science$getElementAttribute('innerHTML')[[1]]
 
+Subject_Rank <- data.frame(
+  Institution_Subject = c(),
+  Rank = c()
+)
+subject_count <- read_html(subject_page) %>%
+  html_nodes(".subject-list > div") %>%
+  length()
 
+for (i in 1:subject_count) {
+  subject_button <- driver$findElement(using = "css selector", value = paste0("#RS05 > div:nth-child(2) > div:nth-child(", i, ") > a:nth-child(1)"))
+  subject_text <- subject_button$getElementText()
+  subject_button$clickElement()
+  search_field2 <- driver$findElement(using = "xpath", value = "/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/input")
+  for (j in 1:nrow(ivydata)) {
+    search_field2$sendKeysToElement(list(ivydata$uni_name[j]))
+    search_field2$sendKeysToElement(list(key = "enter"))
+    rank <- ifelse(driver$findElement(using = "xpath", value = '/html/body/div/div/div/div[2]/div/div[2]/div/div[1]/div/div[1]/div[3]')$getElementText() == "0 Institutions",
+                   NA,
+                   driver$findElement(using = 'class name', value = 'ranking')$getElementText())
+    newrow <- list(Institution_Subject = paste0(ivydata$uni_name[j], "_", subject_text),
+                   Rank = rank[1])
+    Subject_Rank <- bind_rows(Subject_Rank, newrow)
+    search_field2$clickElement()
+    search_field2$sendKeysToElement(list(key = "control", "A"))
+    search_field2$sendKeysToElement(list(key = "delete"))
+  }
+  driver$navigate("https://www.shanghairanking.com/rankings/gras/2023")
+}
+Subject_Rank <- unnest(Subject_Rank, cols = Rank, keep_empty = TRUE)
+for (i in 1:nrow(Subject_Rank)) {
+  Subject_Rank$Rank[i] <- mean(as.numeric(str_extract_all(Subject_Rank$Rank[i], "\\d+")[[1]]))
+}
+print(Subject_Rank)
+
+dbWriteTable(con, "Subject_ranks", Subject_Rank, row.names = FALSE, overwrite = TRUE)
+
+checkTable("my_database.sqlite", "Subject_ranks")
+
+```
+
+## Exercise 4.a Gathering financial data from a raw API
+```{r exercise 4a, message=FALSE, warning=FALSE, cache=TRUE}
+# Function to fetch financial data for a university and year from ProPublica API
+library(httr)
+library(jsonlite)
+
+financial_data <- data.frame()
+
+for (i in 1:nrow(ivydata)) {
+  ein <- ivydata$ein[i]
+  uni <- ivydata$uni_name[i]
+  url <- paste0("https://projects.propublica.org/nonprofits/api/v2/organizations/", ein, ".json")
+  data <- fromJSON(url)$filings_with_data
+  for (j in 1:nrow(data)) {
+    newrow <- list(Institution_Year = paste0(uni, "_", data$tax_prd_yr[j]),
+                   Total_Revenue = data$totrevenue[j],
+                   Total_Assets = data$totassetsend[j])
+    financial_data <- rbind(financial_data, newrow)
+  }
+}
+
+print(financial_data)
+
+con <- dbConnect(RSQLite::SQLite(), dbname = "my_database.sqlite")
+dbWriteTable(con, "Financial_data", financial_data, row.names = FALSE, overwrite = TRUE)
+
+checkTable("my_database.sqlite", "Financial_data")
+
+```
+## Exercise 4.b Gathering local economic data from a packaged API
+```{r exercise 4b, warning=FALSE, message=FALSE, cache=TRUE}
+library(tidycensus)
+
+readRenviron("exercise4b.env")
+apikey <- Sys.getenv("KEY")
+
+# Retrieve the data for 2015.
+us_county_income_2015 <- get_acs(geography = "county",
+                     variables = "B19013_001",
+                           year = 2015)
+print(us_county_income_2015)
+
+# Retrieve the data for 2020.
+us_county_income_2020 <- get_acs(geography = "county",
+                     variables = "B19013_001",
+                           year = 2020)
+print(us_county_income_2020)
+
+new_ivydata <- data.frame()
+
+for (i in 1:nrow(ivydata)) {
+  institution <- ivydata$uni_name[i]
+  ins_yr2015 <- paste0(institution, "_", 2015)
+  ins_yr2020 <- paste0(institution, "_", 2020)
+  county <- ivydata$County[i]
+  rownumber2015 <- which(us_county_income_2015$NAME == county)
+  rownumber2020 <- which(us_county_income_2020$NAME == county)
+  estimate2015 <- us_county_income_2015$estimate[rownumber2015]
+  estimate2020 <- us_county_income_2020$estimate[rownumber2020]
+  newrow2015 <- list(Institution_Year = ins_yr2015,
+                     County = county,
+                     Estimated_median_household_income = estimate2015)
+  newrow2020 <- list(Institution_Year = ins_yr2020,
+                     County = county,
+                     Estimated_median_household_income = estimate2020)
+  new_ivydata <- rbind(new_ivydata, newrow2015, newrow2020)
+}
+print(new_ivydata)
+
+dbWriteTable(con, "Ivy_League_with_Economic_Data", new_ivydata, row.names = FALSE, overwrite = TRUE)
+
+checkTable("my_database.sqlite", "Ivy_League_with_Economic_Data")
+
+```
+## Exercise 5.a Analysis and visualisation
+```{r exercise 5a}
+
+mydb <- dbConnect(RSQLite::SQLite(), "my_database.sqlite")
+
+analysis_table <- dbGetQuery(mydb, "
+SELECT 
+    e.Institution AS Institution,
+    ROUND(AVG(ar.Rank)) AS Avg_ranking,
+    avg_sub.Economics_Rank,
+    avg_sub.Political_Science_Rank,
+    avg_sub.Sociology_Rank,
+    e.Endowment / e.Total_Students AS Endowment_per_Student,
+    AVG(fd.Total_Revenue * 1.0 / e.Total_Students) AS Avg_Revenue_Per_Student,
+    ROUND(AVG(iwe.Estimated_median_household_income)) AS Avg_median_household_income
+FROM 
+    Exercise2_Universities_Data AS e
+LEFT JOIN 
+    ARWU_ranks AS ar ON e.Institution = SUBSTR(ar.Institution_Year, 1, LENGTH(ar.Institution_Year) - 5)
+LEFT JOIN 
+    Financial_data AS fd ON SUBSTR(fd.Institution_Year, 1, INSTR(fd.Institution_Year, '_') - 1) = e.Institution
+LEFT JOIN 
+    Ivy_League_with_Economic_Data AS iwe ON e.Institution = SUBSTR(iwe.Institution_Year, 1, LENGTH(iwe.Institution_Year) - 5)
+LEFT JOIN 
+    (
+        SELECT 
+            t2.uni_name AS Institution,
+            CAST(e.Rank AS FLOAT) AS Economics_Rank,
+            CAST(p.Rank AS FLOAT) AS Political_Science_Rank,
+            CAST(s.Rank AS FLOAT) AS Sociology_Rank
+        FROM 
+            Ivy_League AS t2
+        LEFT JOIN 
+            (SELECT Institution_Subject, Rank FROM Subject_ranks WHERE Institution_Subject LIKE '%Economics%') AS e ON t2.uni_name = SUBSTR(e.Institution_Subject, 1, INSTR(e.Institution_Subject, '_') - 1)
+        LEFT JOIN 
+            (SELECT Institution_Subject, Rank FROM Subject_ranks WHERE Institution_Subject LIKE '%Political Science%') AS p ON t2.uni_name = SUBSTR(p.Institution_Subject, 1, INSTR(p.Institution_Subject, '_') - 1)
+        LEFT JOIN 
+            (SELECT Institution_Subject, Rank FROM Subject_ranks WHERE Institution_Subject LIKE '%Sociology%') AS s ON t2.uni_name = SUBSTR(s.Institution_Subject, 1, INSTR(s.Institution_Subject, '_') - 1)
+    ) AS avg_sub ON e.Institution = avg_sub.Institution
+WHERE 
+    e.IvyLeague_Member = 'Yes'
+    AND CAST(REPLACE(SUBSTR(fd.Institution_Year, INSTR(fd.Institution_Year, '_') + 1), '_', '') AS INTEGER) BETWEEN 2015 AND 2020
+GROUP BY 
+    e.Institution;
+
+           ")
+print(analysis_table)
 
 
 ```
 
+## Exercise 5a plot
+```{r exercise 5a-2, warning=FALSE, message=FALSE}
+library(ggplot2)
+plot1 <- analysis_table %>%
+  ggplot()+
+  geom_line(aes(Institution, Avg_ranking, group = "", color = "Average Rank"), size = 0.8)+
+  geom_point(aes(x= Institution, y = Avg_ranking),size = 2.5, color = "orange", alpha = 0.6)+
+  geom_line(aes(Institution, Economics_Rank, group = "", color = "Economics Rank"), size = 0.8)+
+  geom_point(aes(Institution, Economics_Rank), size = 2.5, color = "lightblue", alpha = 0.8)+
+  geom_line(aes(Institution, analysis_table$Political_Science_Rank, group = "",color = "Political Science Rank"), size = 0.8)+
+  geom_point(aes(Institution, analysis_table$Political_Science_Rank), size = 2.5, color = "pink", alpha = 0.8)+
+  geom_line(aes(Institution, Sociology_Rank, group = "",color = "Sociology Rank"), size = 0.8, alpha = 0.6)+
+  geom_point(aes(Institution, Sociology_Rank), size = 2.5, color = "green", alpha = 0.6)+
+  scale_y_reverse()+
+  theme_bw()+
+  scale_color_manual(values = c("Average Rank" = "orange", "Economics Rank" = "lightblue", "Political Science Rank" = "pink", "Sociology Rank" = "green"))+
+  labs(color = "")+
+  labs(x = "Institution", y = "Rank") +
+  ggtitle("Figure1. Relationships between average university ranking and average subject ranking")+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        axis.title.x = element_blank(),
+        panel.border = element_blank())
+plot1
 
+
+plot2 <- analysis_table %>%
+  ggplot() +
+  aes(x = Institution)+
+  geom_bar(aes(y = Endowment_per_Student, fill = "Endowment Per Student"), stat = "identity", alpha = 0.8, width = 0.7) +
+  geom_line(aes(y = 4300000-analysis_table$Avg_ranking * max(analysis_table$Endowment_per_Student) / max(analysis_table$Avg_ranking), group = "", color = "Average Rank"), size = 0.8) +
+  geom_point(aes(y = 4300000-analysis_table$Avg_ranking * max(analysis_table$Endowment_per_Student) / max(analysis_table$Avg_ranking)), color = "orange", size = 3, alpha = 0.6) +
+  geom_text(aes(y = 4300000-analysis_table$Avg_ranking * max(analysis_table$Endowment_per_Student) / max(analysis_table$Avg_ranking), label = Avg_ranking), family = "Arial", size = 3, vjust = 1.5)+
+  geom_text(aes(Institution, Endowment_per_Student, label = paste(round(Endowment_per_Student/10^6, 2), "million")), family = "Arial", size = 2.5, vjust = -0.5)+
+  scale_y_continuous(sec.axis = sec_axis(~ . * max(analysis_table$Avg_ranking) / max(analysis_table$Endowment_per_Student), name = "Average Rank") , trans = ~.-min(analysis_table$Avg_ranking) + max(analysis_table$Avg_ranking))
+  guides(fill = guide_legend(title = "", override.aes = list(color = NULL)),
+         color = guide_legend(title = "", override.aes = list(fill = "orange", linetype = 1))) +
+  scale_fill_manual(values = "skyblue") +
+  theme_bw() +
+  expand_limits(y = 0) +
+  ggtitle("Figure2. Relationships between average university ranking and endowment per student") +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    axis.title.x = element_blank(),
+    panel.border = element_blank()
+  )
+
+plot2
+
+
+plot3 <- analysis_table %>%
+  ggplot() +
+  geom_line(aes(Institution, Avg_median_household_income, color = "average median household income", group = ""), size = 0.8, alpha = 0.6) + 
+  geom_line(aes(Institution, Endowment_per_Student, group = "", color = "average endowment per student"), size = 0.8, alpha = 0.6) +
+  geom_point(aes(Institution, Endowment_per_Student), size = 2.5, color = "orange", alpha = 0.6)+
+  geom_text(aes(Institution, Endowment_per_Student, label = paste(round(Endowment_per_Student/10^6, 2), "million")), family = "Arial", size = 2.5, vjust = -0.5)+
+  geom_point(aes(Institution, Avg_median_household_income), size = 2.5, color = "lightblue", alpha = 0.6)+
+  geom_text(aes(Institution, Avg_median_household_income, label = Avg_median_household_income), family = "Arial", size = 2.5, vjust = -0.5)+
+  labs(color = "", 
+       y = "USD")+
+  theme_light()+
+  ggtitle("Figure3. Relationships between average endowment per student and average median household income")+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        axis.title.x = element_blank(),
+        panel.border = element_blank())
+plot3
+
+plot4 <- analysis_table %>%
+  ggplot()+
+  geom_line(aes(Institution, Avg_Revenue_Per_Student, group = "", color = "average revenue per student"), size = 0.8)+
+  geom_text(aes(Institution, Avg_Revenue_Per_Student, label = round(Avg_Revenue_Per_Student)), family = "Arial", size = 2.5, vjust = -0.5)+
+  geom_point(aes(Institution, Avg_Revenue_Per_Student), size = 2.5, color = "skyblue", alpha = 0.8)+
+  geom_line(aes(Institution, Avg_median_household_income, group = "", color = "average median household income")) +
+  geom_text(aes(Institution, Avg_median_household_income, label = Avg_median_household_income), family = "Arial", size = 2.5, vjust = -0.5)+
+  geom_point(aes(Institution, Avg_median_household_income), size = 2.5, color = "orange", alpha = 0.6)+
+  labs(color = "", 
+       y = "USD")+
+  theme_light()+
+  ggtitle("Figure4. Relationships between average revenue per student and average median household income")+
+  theme(axis.text.x = element_text(angle = 30, hjust = 1),
+        panel.border = element_blank(),
+        axis.title.x = element_blank())
+plot4
+
+```
 
 
 ## Appendix: All code in this assignment
